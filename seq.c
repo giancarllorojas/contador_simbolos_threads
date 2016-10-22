@@ -52,9 +52,19 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 	fclose(arq);
 }
 
+/**
+* Função que conta os simbolos de um arquivo e coloca em um vetor
+**/
+void conta_arquivo(FILE* arq, simbolo* vetor){
+	int c;
+	while ((c = fgetc(arq)) != EOF) {
+        contabiliza_simbolo(c, vetor);
+		//printf("%c", c);
+    }
+}
+
 int main(int argc, char *argv[]){
 	simbolo *vetor;
-	int c;
 	double inicio, fim, tempo;
 	if(argc < 3 ){
 		printf("Execute %s <arquivo entrada> <arquivo saida>\n", argv[0]);
@@ -67,10 +77,7 @@ int main(int argc, char *argv[]){
 	FILE* arq_saida   = fopen( argv[2], "w");
 
 	GET_TIME(inicio);
-	while ((c = fgetc(arq_entrada)) != EOF) {
-        contabiliza_simbolo(c, vetor);
-		//printf("%c", c);
-    }
+	conta_arquivo(arq_entrada, vetor);
 	GET_TIME(fim);
 
 	tempo = fim - inicio;
