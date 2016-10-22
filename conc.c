@@ -79,7 +79,7 @@ void *le_arquivo(void *arg){
 **/
 void *contabiliza_arquivo(void *arg){
 	int c;
-	while (sinal) {
+	while (sinal || !buffer_esta_vazio()) {
 		if(!buffer_esta_vazio()){
 			pthread_mutex_lock(&mutex);
 			c = buffer_retirar(c);
