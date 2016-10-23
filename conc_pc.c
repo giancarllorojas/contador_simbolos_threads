@@ -2,9 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include<pthread.h>
+#include <pthread.h>
 #include "timer.h"
-//#include "buffer.c"
 
 #define QT_SIMBOLOS 90 //quantidade de simbolos ASC que se enquadram nos critérios do problema { !, ?, @.... A, B ,C... , a , b c ...0,1,2... }
 #define N_BUFFER 1000 //tamanho do buffer
@@ -15,44 +14,45 @@ typedef struct simbolo{
 }simbolo;
 
 /** Variaveis globais **/
-pthread_mutex_t mutex;
-pthread_mutex_t mutex_cont;
-pthread_cond_t cond;
+pthread_mutex_t mutex, mutex_contador;
+pthread_cond_t cond_leitor, cond_contador;
 FILE *arq_entrada;
 simbolo *vetor;
 char buffer[N_BUFFER];
-bool tamanho;
-int count=0, sinal = 1,nthreads;
+int count=0, sinal_fim_arquivo = 0, sinal_fim_contados = 0, nthreads;
 
 void insereBuffer (char item) {
 	static int in = 0;
 	pthread_mutex_lock(&mutex);
-	if(count == N_BUFFER) {
-		pthread_cond_wait(&cond, &mutex);
+	while(count == N_BUFFER) {
+		pthread_cond_wait(&cond_leitor, &mutex);
 	}
-	//printf("%c", item);
+	printf("%c", item);
 	buffer[in] = item;
 	count++;
-	pthread_cond_broadcast(&cond);
-	pthread_mutex_unlock(&mutex);
 	in = (in + 1)%N_BUFFER;
+	pthread_mutex_unlock(&mutex);
+	pthread_cond_signal(&cond_contador);
 }
 
 char retiraBuffer () {
 	static int out = 0; char item;
 	pthread_mutex_lock(&mutex);
-	if(count == 0) {
-		//printf("wait");
-		pthread_cond_wait(&cond, &mutex);
+
+	if(sinal_fim_arquivo && !count) {
+		sinal_fim_contados = 1;
+		printf("cheguei no fim: %i\n", sinal_fim_contados);
+		return -1;
+	}
+	while(count == 0) {
+		pthread_cond_wait(&cond_contador, &mutex);
 	}
 	item = buffer[out];
 	count--;
-	if(item == EOF) sinal = 0;
-	pthread_cond_broadcast(&cond);
-	pthread_mutex_unlock(&mutex);
 	out = (out + 1)%N_BUFFER;
-	printf("%c", item);
-	
+	pthread_mutex_unlock(&mutex);
+	pthread_cond_signal(&cond_leitor);
+	//printf("%c", item);
 	return item;
 }
 
@@ -80,8 +80,9 @@ simbolo* instancia_vetor_simbolos(){
 void contabiliza_simbolo(char simb){
     int asc_s = (int) simb;
 	if(asc_s > 33 && asc_s < 33+QT_SIMBOLOS){
+		pthread_mutex_lock(&mutex_contador);
 		vetor[asc_s - 33].ocorrencias++;
-		//printf("c");
+		pthread_mutex_unlock(&mutex_contador);
 	}
 }
 
@@ -101,14 +102,12 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 * Função que lê os simbolos do arquivo e joga pro buffer
 **/
 void *le_arquivo(void *arg){
-
 	int item, c, i;
 	while((c = fgetc(arq_entrada)) != EOF) {
 		insereBuffer(c);
-		//printf("%i\n", cont);
 	}
-	insereBuffer(EOF);
-	//printf("li td");
+	sinal_fim_arquivo = 1;
+	printf("\nENDOFFILE: %i\n", sinal_fim_arquivo);
 	pthread_exit(NULL);
 }
 
@@ -118,12 +117,16 @@ void *le_arquivo(void *arg){
 void *contabiliza_arquivo(void *arg){
 	int c;
 	int item;
-	while(sinal) {
-		item = retiraBuffer();
+	while((item = retiraBuffer())) {
+		//printf("count: %i\n", count);
+		//printf("item: %i\n", item);
+		if(sinal_fim_contados) {
+			//printf("cheguei mesmo\n");
+			break;
+		}
 		contabiliza_simbolo(item);
 	}
-	printf("exit thread");
-	pthread_exit(NULL);
+	
 }
 
 int main(int argc, char *argv[]){
@@ -131,7 +134,8 @@ int main(int argc, char *argv[]){
 	double inicio, fim, tempo;
 
 	pthread_mutex_init(&mutex, NULL);
-	pthread_cond_init(&cond, NULL);
+	pthread_cond_init(&cond_leitor, NULL);
+	pthread_cond_init(&cond_contador, NULL);
 
 	if(argc < 4 ){
 		printf("Execute %s <arquivo entrada> <arquivo saida> <número threads>\n", argv[0]);
@@ -149,11 +153,6 @@ int main(int argc, char *argv[]){
 	vetor = instancia_vetor_simbolos();
 	arq_entrada = fopen(argv[1], "r");
 	FILE* arq_saida   = fopen( argv[2], "w");
-
-	fseek(arq_entrada, 0, SEEK_END);
-	tamanho = ftell(arq_entrada);
-	rewind(arq_entrada);
-	printf("%i", tamanho);
 
 	GET_TIME(inicio);
 	pthread_create(&thread[0], NULL, le_arquivo, NULL);

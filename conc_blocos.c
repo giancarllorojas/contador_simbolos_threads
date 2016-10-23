@@ -2,12 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include<pthread.h>
+#include <pthread.h>
 #include "timer.h"
-//#include "buffer.c"
 
 #define QT_SIMBOLOS 90 //quantidade de simbolos ASC que se enquadram nos critérios do problema { !, ?, @.... A, B ,C... , a , b c ...0,1,2... }
-#define N_BUFFER 1000 //tamanho do buffer
 
 typedef struct simbolo{
 	char valor;
@@ -16,45 +14,9 @@ typedef struct simbolo{
 
 /** Variaveis globais **/
 pthread_mutex_t mutex;
-pthread_mutex_t mutex_cont;
-pthread_cond_t cond;
-FILE *arq_entrada;
+int nthreads;
+char *arq_nome;
 simbolo *vetor;
-char buffer[N_BUFFER];
-bool tamanho;
-int count=0, sinal = 1,nthreads;
-
-void insereBuffer (char item) {
-	static int in = 0;
-	pthread_mutex_lock(&mutex);
-	if(count == N_BUFFER) {
-		pthread_cond_wait(&cond, &mutex);
-	}
-	//printf("%c", item);
-	buffer[in] = item;
-	count++;
-	pthread_cond_broadcast(&cond);
-	pthread_mutex_unlock(&mutex);
-	in = (in + 1)%N_BUFFER;
-}
-
-char retiraBuffer () {
-	static int out = 0; char item;
-	pthread_mutex_lock(&mutex);
-	if(count == 0) {
-		//printf("wait");
-		pthread_cond_wait(&cond, &mutex);
-	}
-	item = buffer[out];
-	count--;
-	if(item == EOF) sinal = 0;
-	pthread_cond_broadcast(&cond);
-	pthread_mutex_unlock(&mutex);
-	out = (out + 1)%N_BUFFER;
-	printf("%c", item);
-	
-	return item;
-}
 
 
 /**
@@ -80,7 +42,9 @@ simbolo* instancia_vetor_simbolos(){
 void contabiliza_simbolo(char simb){
     int asc_s = (int) simb;
 	if(asc_s > 33 && asc_s < 33+QT_SIMBOLOS){
+		pthread_mutex_lock(&mutex);
 		vetor[asc_s - 33].ocorrencias++;
+		pthread_mutex_unlock(&mutex);
 		//printf("c");
 	}
 }
@@ -98,31 +62,29 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 }
 
 /**
-* Função que lê os simbolos do arquivo e joga pro buffer
+* Função que lê os simbolos do arquivo, separando blocos para cada thread
 **/
 void *le_arquivo(void *arg){
+	int item, c, i, tid = *(int*) arg, tam_arq, tam_bloco, inicio, fim;
+	FILE* arq = fopen(arq_nome, "r");
+	
+	fseek (arq, 0, SEEK_END);
+    tam_arq=ftell (arq);
 
-	int item, c, i;
-	while((c = fgetc(arq_entrada)) != EOF) {
-		insereBuffer(c);
-		//printf("%i\n", cont);
-	}
-	insereBuffer(EOF);
-	//printf("li td");
-	pthread_exit(NULL);
-}
+	tam_bloco = tam_arq/nthreads;
+	inicio = tam_bloco*tid;
+	fim = inicio + tam_bloco;
+	if(tid == nthreads - 1) fim = tam_arq;
 
-/**
-* Função que lê os simbolos do buffer e contabiliza no vetor
-**/
-void *contabiliza_arquivo(void *arg){
-	int c;
-	int item;
-	while(sinal) {
-		item = retiraBuffer();
-		contabiliza_simbolo(item);
+	fseek (arq, inicio, SEEK_SET);
+	printf("tid: %i, inicio: %i, fim: %i, tamanho: %i\n", tid, inicio, fim, tam_arq);
+	for(i = inicio; i < fim; i++){
+		c = fgetc(arq);
+		contabiliza_simbolo(c);
+		//printf("%c", c);
 	}
-	printf("exit thread");
+	
+
 	pthread_exit(NULL);
 }
 
@@ -131,7 +93,6 @@ int main(int argc, char *argv[]){
 	double inicio, fim, tempo;
 
 	pthread_mutex_init(&mutex, NULL);
-	pthread_cond_init(&cond, NULL);
 
 	if(argc < 4 ){
 		printf("Execute %s <arquivo entrada> <arquivo saida> <número threads>\n", argv[0]);
@@ -142,25 +103,20 @@ int main(int argc, char *argv[]){
 		printf("Número minimo de threads é 2\n");
 		exit(EXIT_FAILURE);
 	}
-
+	
+	GET_TIME(inicio);
 	nthreads = atoi(argv[3]);
 	pthread_t thread[nthreads];
 
 	vetor = instancia_vetor_simbolos();
-	arq_entrada = fopen(argv[1], "r");
+	arq_nome = argv[1];
 	FILE* arq_saida   = fopen( argv[2], "w");
 
-	fseek(arq_entrada, 0, SEEK_END);
-	tamanho = ftell(arq_entrada);
-	rewind(arq_entrada);
-	printf("%i", tamanho);
-
-	GET_TIME(inicio);
-	pthread_create(&thread[0], NULL, le_arquivo, NULL);
-	for(t = 1; t < nthreads; t++){
+	
+	for(t = 0; t < nthreads; t++){
 		tid = (int*) malloc(sizeof(int));
 		*tid = t;
-		pthread_create(&thread[t], NULL, contabiliza_arquivo, (void*)tid); 
+		pthread_create(&thread[t], NULL, le_arquivo, (void*)tid); 
 	}
 
 	for (t = 0; t < nthreads; t++) {
@@ -168,9 +124,7 @@ int main(int argc, char *argv[]){
   	}
 	GET_TIME(fim);
 
-	fclose(arq_entrada);
-
 	tempo = fim - inicio;
-	printf("tempo: %f\n", tempo);
 	imprime_simbolos(vetor, arq_saida);
+	printf("tempo: %f\n", tempo);
 }
