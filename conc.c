@@ -4,9 +4,10 @@
 #include <stdbool.h>
 #include<pthread.h>
 #include "timer.h"
-#include "buffer.c"
+//#include "buffer.c"
 
 #define QT_SIMBOLOS 90 //quantidade de simbolos ASC que se enquadram nos critérios do problema { !, ?, @.... A, B ,C... , a , b c ...0,1,2... }
+#define N_BUFFER 200 //tamanho do buffer
 
 typedef struct simbolo{
 	char valor;
@@ -15,9 +16,43 @@ typedef struct simbolo{
 
 /** Variaveis globais **/
 pthread_mutex_t mutex;
+pthread_cond_t cond;
 FILE *arq_entrada;
 simbolo *vetor;
-bool sinal = 1;
+char buffer[N_BUFFER];
+bool sinal = 0;
+int count=0;
+int nthreads;
+
+void insereBuffer (char item) {
+	static int in = 0;
+	pthread_mutex_lock(&mutex);
+	while(count == N_BUFFER) {
+		//printf("i");
+		pthread_cond_wait(&cond, &mutex);
+	}
+	//printf("%c", item);
+	buffer[in] = item;
+	count++;
+	pthread_cond_signal(&cond);
+	pthread_mutex_unlock(&mutex);
+	in = (in + 1)%N_BUFFER;
+}
+
+char retiraBuffer () {
+	static int out = 0; char item;
+	pthread_mutex_lock(&mutex);
+	while(count == 0) {
+		//printf("r");
+		pthread_cond_wait(&cond, &mutex);
+	}
+	item = buffer[out];
+	count--;
+	pthread_cond_broadcast(&cond);
+	pthread_mutex_unlock(&mutex);
+	out = (out + 1)%N_BUFFER;
+	return item;
+}
 
 
 /**
@@ -44,6 +79,7 @@ void contabiliza_simbolo(char simb){
     int asc_s = (int) simb;
 	if(asc_s > 33 && asc_s < 33+QT_SIMBOLOS){
 		vetor[asc_s - 33].ocorrencias++;
+		//printf("c");
 	}
 }
 
@@ -56,7 +92,6 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 	for( i = 0; i < QT_SIMBOLOS;i++)
 		if(vetor_simbolos[i]. ocorrencias != 0)
 			fprintf(arq, " %c, %d\n", vetor_simbolos[i].valor, vetor_simbolos[i].ocorrencias);
-	
 	fclose(arq);
 }
 
@@ -64,14 +99,16 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 * Função que lê os simbolos do arquivo e joga pro buffer
 **/
 void *le_arquivo(void *arg){
-	int c;
-	while ((c = fgetc(arq_entrada)) != EOF) {
-		pthread_mutex_lock(&mutex);
-		buffer_inserir(c);
-		pthread_mutex_unlock(&mutex);
-		//printf("%c", c);
-    }
-	sinal = 0; //sinaliza que terminou de ler o arquivo
+
+	int item, cont=0, c, i;
+	while((c = fgetc(arq_entrada)) != EOF) {
+		insereBuffer(c);
+		cont++;
+	}
+	printf("h");
+	for(i=0; i <= nthreads; i++) insereBuffer(EOF);
+	//printf("terminei de ler");
+	pthread_exit(NULL);
 }
 
 /**
@@ -79,22 +116,23 @@ void *le_arquivo(void *arg){
 **/
 void *contabiliza_arquivo(void *arg){
 	int c;
-	while (sinal || !buffer_esta_vazio()) {
-		if(!buffer_esta_vazio()){
-			pthread_mutex_lock(&mutex);
-			c = buffer_retirar(c);
-			pthread_mutex_unlock(&mutex);
-			contabiliza_simbolo(c);
-			//printf("%c", c);
-		}
-    }
+
+	int item, cont=0;
+	while((item = retiraBuffer()) != EOF) {
+		//printf("%c", item);
+		cont++;
+		contabiliza_simbolo(item);
+	}
+	//printf("exit thread");
+	pthread_exit(NULL);
 }
 
 int main(int argc, char *argv[]){
-	int c, t, *tid, nthreads;
+	int c, t, *tid;
 	double inicio, fim, tempo;
 
 	pthread_mutex_init(&mutex, NULL);
+	pthread_cond_init(&cond, NULL);
 
 	if(argc < 4 ){
 		printf("Execute %s <arquivo entrada> <arquivo saida> <número threads>\n", argv[0]);
@@ -114,15 +152,14 @@ int main(int argc, char *argv[]){
 	FILE* arq_saida   = fopen( argv[2], "w");
 
 	GET_TIME(inicio);
-	pthread_create(&thread[0], NULL, contabiliza_arquivo, NULL);
+	pthread_create(&thread[0], NULL, le_arquivo, NULL);
 	for(t = 1; t < nthreads; t++){
 		tid = (int*) malloc(sizeof(int));
 		*tid = t;
-		pthread_create(&thread[t], NULL, le_arquivo, (void*)tid); 
+		pthread_create(&thread[t], NULL, contabiliza_arquivo, (void*)tid); 
 	}
 
 	for (t = 0; t < nthreads; t++) {
-   		
 		 pthread_join(thread[t], NULL);
   	}
 	GET_TIME(fim);
