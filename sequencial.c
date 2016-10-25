@@ -81,6 +81,6 @@ int main(int argc, char *argv[]){
 	GET_TIME(fim);
 
 	tempo = fim - inicio;
-	printf("tempo: %f\n", tempo);
+	printf("Tempo: %f\n", tempo);
 	imprime_simbolos(vetor, arq_saida);
 }

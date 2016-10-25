@@ -3,10 +3,15 @@
 #include <string.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/types.h>
+
 #include "timer.h"
 
 #define QT_SIMBOLOS 90 //quantidade de simbolos ASC que se enquadram nos critérios do problema { !, ?, @.... A, B ,C... , a , b c ...0,1,2... }
 #define N_BUFFER 1000 //tamanho do buffer
+#define N_CADEIA 1000
+#define SIMBOLO_INICIAL 33
 
 typedef struct simbolo{
 	char valor;
@@ -14,39 +19,46 @@ typedef struct simbolo{
 }simbolo;
 
 /** Variaveis globais **/
-pthread_mutex_t mutex, mutex_contador;
+pthread_mutex_t mutex;
 pthread_cond_t cond_leitor, cond_contador;
 FILE *arq_entrada;
-simbolo *vetor;
-char buffer[N_BUFFER];
+simbolo *vetor_contagem_total;
+char *buffer[N_BUFFER];
 int count=0, nthreads;
 
-void insereBuffer (char item) {
+void insereBuffer (char *cadeia) {
 	static int in = 0;
+	char *cad;
+	if(cadeia != NULL){
+		cad = (char*)malloc(sizeof(char)*N_CADEIA);
+		strcpy(cad, cadeia);
+	}else cad = NULL;
+
 	pthread_mutex_lock(&mutex);
 	while(count == N_BUFFER) {
 		pthread_cond_wait(&cond_leitor, &mutex);
 	}
 	//printf("%c", item);
-	buffer[in] = item;
+	buffer[in] = cad;
 	count++;
 	in = (in + 1)%N_BUFFER;
 	pthread_mutex_unlock(&mutex);
 	pthread_cond_signal(&cond_contador);
 }
 
-char retiraBuffer () {
-	static int out = 0; char item;
+char *retiraBuffer () {
+	static int out = 0; char *cadeia;
 	pthread_mutex_lock(&mutex);
 	while(count == 0) {
 		pthread_cond_wait(&cond_contador, &mutex);
 	}
-	item = buffer[out];
+	cadeia = buffer[out];
+	//printf("%s", cadeia);
 	count--;
 	out = (out + 1)%N_BUFFER;
 	pthread_mutex_unlock(&mutex);
 	pthread_cond_signal(&cond_leitor);
-	return item;
+	return cadeia;
 }
 
 
@@ -54,28 +66,39 @@ char retiraBuffer () {
 * Cria um vetor de simbolo possíveis para o problema
 **/
 simbolo* instancia_vetor_simbolos(){
-	
 	int i;
 	simbolo *vetor = (simbolo*) malloc(QT_SIMBOLOS*sizeof(simbolo));
-
 	for(i = 0; i < QT_SIMBOLOS; i++){
-		vetor[i].valor = (char) i + 33; //pois os caracteres asc que nos interessam começam a partir do 33
+		vetor[i].valor = (char) i + SIMBOLO_INICIAL; //pois os caracteres asc que nos interessam começam a partir do SIMBOLO_INICIAL
 		vetor[i].ocorrencias = 0;
 		//printf(" simbolo asc %c  codigo asc %d indice: %d %d\n", vetor[i].asc_code,vetor[i].asc_code, i, vetor[i].ocorrencias);
 	}
-	
 	return vetor; //retorna um vetor cujos elementos sao os caracteres asc que se enquadram no problema
 }
 
 /**
-* Contabiliza a ocorrência de um simbolo no texto, se ele tiver dentro dos critérios
+* Contabiliza a ocorrência de um simbolo de uma cadeia de chars do texto, se ele tiver dentro dos critérios
 **/
-void contabiliza_simbolo(char simb){
-    int asc_s = (int) simb;
-	if(asc_s > 33 && asc_s < 33+QT_SIMBOLOS){
-		pthread_mutex_lock(&mutex_contador);
-		vetor[asc_s - 33].ocorrencias++;
-		pthread_mutex_unlock(&mutex_contador);
+void contabiliza_cadeia_simbolos(char *cadeia, simbolo* vetor){
+	int i = 0;
+	char simbolo;
+	int asc_s;
+	while((simbolo = cadeia[i]) != '\0'){
+		asc_s = (int) simbolo;
+		if(asc_s > SIMBOLO_INICIAL && asc_s < SIMBOLO_INICIAL+QT_SIMBOLOS){
+			vetor[asc_s - SIMBOLO_INICIAL].ocorrencias++;
+		}
+		i++;
+	}
+}
+
+/**
+* função para juntar as contagens de cada thread em um único vetor
+**/
+void concatena_vetor_contagem(simbolo* vetor){
+	int i = 0;
+	for(i = 0; i < QT_SIMBOLOS; i++){
+		vetor_contagem_total[i].ocorrencias += vetor[i].ocorrencias;
 	}
 }
 
@@ -84,6 +107,7 @@ void contabiliza_simbolo(char simb){
 **/
 void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 	int i;
+	printf("Escrevendo saída no arquivo\n");
 	fprintf(arq, "Simbolo, Quantidade\n");
 	for( i = 0; i < QT_SIMBOLOS;i++)
 		if(vetor_simbolos[i]. ocorrencias != 0)
@@ -96,14 +120,20 @@ void imprime_simbolos(simbolo *vetor_simbolos, FILE* arq){
 **/
 void *le_arquivo(void *arg){
 	int item, c, i;
-	while((c = fgetc(arq_entrada)) != EOF) {
-		insereBuffer(c);
+	char cadeia[N_CADEIA];
+	double inicio, fim;
+	GET_TIME(inicio);
+	while(fgets (cadeia, 60, arq_entrada)!=NULL) {
+		insereBuffer(cadeia);
+		//printf("%s", cadeia);
 	}
-	for(i = 0; i < nthreads; i++){
-		printf("enviando veneno para a thread\n");
-		insereBuffer(EOF);
+	//printf("\nENDOFFILE\n");
+	for(i = 1; i < nthreads; i++){
+		//printf("enviando veneno para a thread: %i\n", i);
+		insereBuffer(NULL);
 	}
-	printf("\nENDOFFILE\n");
+	GET_TIME(fim);
+	printf("tempo para ler o arquivo: %d\n", (fim-inicio));
 	pthread_exit(NULL);
 }
 
@@ -112,18 +142,23 @@ void *le_arquivo(void *arg){
 **/
 void *contabiliza_arquivo(void *arg){
 	int c;
-	int item;
-	while((item = retiraBuffer()) != EOF) {
-		//printf("count: %i\n", count);
-		//printf("item: %i\n", item);
-		contabiliza_simbolo(item);
+
+	char *cadeia;
+	simbolo *vetor_contagem = instancia_vetor_simbolos();
+	while((cadeia = retiraBuffer()) != NULL) {
+		contabiliza_cadeia_simbolos(cadeia, vetor_contagem);
+		free(cadeia);
 	}
-	
+
+	pthread_mutex_lock(&mutex);
+	concatena_vetor_contagem(vetor_contagem);
+	pthread_mutex_lock(&mutex);
 }
 
 int main(int argc, char *argv[]){
 	int c, t, *tid;
-	double inicio, fim, tempo;
+	double inicio, fim;
+	printf ("PID: %d\n", getpid());
 
 	pthread_mutex_init(&mutex, NULL);
 	pthread_cond_init(&cond_leitor, NULL);
@@ -142,12 +177,14 @@ int main(int argc, char *argv[]){
 	nthreads = atoi(argv[3]);
 	pthread_t thread[nthreads];
 
-	vetor = instancia_vetor_simbolos();
+	
 	arq_entrada = fopen(argv[1], "r");
 	FILE* arq_saida   = fopen( argv[2], "w");
+	vetor_contagem_total = instancia_vetor_simbolos();
 
-	GET_TIME(inicio);
+
 	pthread_create(&thread[0], NULL, le_arquivo, NULL);
+	GET_TIME(inicio);
 	for(t = 1; t < nthreads; t++){
 		tid = (int*) malloc(sizeof(int));
 		*tid = t;
@@ -158,10 +195,15 @@ int main(int argc, char *argv[]){
 		 pthread_join(thread[t], NULL);
   	}
 	GET_TIME(fim);
+	printf("tempo processamento: %f\n", fim-inicio);
 
+	GET_TIME(inicio);
+	imprime_simbolos(vetor_contagem_total, arq_saida);
+	GET_TIME(fim);
+
+	printf("tempo escrever saída: %f\n", fim-inicio);
 	fclose(arq_entrada);
 
-	tempo = fim - inicio;
-	printf("tempo: %f\n", tempo);
-	imprime_simbolos(vetor, arq_saida);
+	
+	
 }
