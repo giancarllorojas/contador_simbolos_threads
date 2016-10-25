@@ -133,7 +133,7 @@ void *le_arquivo(void *arg){
 		insereBuffer(NULL);
 	}
 	GET_TIME(fim);
-	printf("tempo para ler o arquivo: %d\n", (fim-inicio));
+	printf("tempo para ler o arquivo: %f\n", (fim-inicio));
 	pthread_exit(NULL);
 }
 
